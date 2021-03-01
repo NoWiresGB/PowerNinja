@@ -16,8 +16,10 @@ SoftwareSerial serial(rxPin, txPin);
 bool debug = true;  // runstate serial output
 bool low_bat = false; // low battery flag
 
-#define BATTERYMIN 2400 // Minimum battery startup voltage 2.4v
-#define BATTERYRESET 2650 // Battery restart voltage 2.65v
+#define BATTERYMIN              2400 // Minimum battery startup voltage 2.4v
+#define BATTERYRESET            2650 // Battery restart voltage 2.65v
+#define BATTERYOVERCHARGELIMIT  3050 // set overcharge above 3.05v
+#define BATTERYOVERCHARGECLEAR  2900 // clear overcharge once we fall below 2.9v once we've been in an overcharge state
 
 bool overcharge = false;  // flag to capture overcharge battery state
 
@@ -50,14 +52,14 @@ void myWatchdogEnable(const byte interval) {
     ADCSRA = 0;
     power_all_disable(); // shut down ADC, Timer 0 and 1, serial etc
   
-    set_sleep_mode (SLEEP_MODE_PWR_DOWN); 
+    set_sleep_mode (SLEEP_MODE_PWR_DOWN);
     sleep_bod_disable();
     sei();
     sleep_mode();
 
     power_all_enable();
     ADCSRA = old_ADCSRA;
-} 
+}
 
 
 void setup() {
@@ -126,12 +128,12 @@ void loop() {
                 myWatchdogEnable (SLEEP1); // 1 second short sleep to save power whilst waiting
             }
 
-            if (overcharge && (VBat < 2900) ) { // clear overcharge state, with some hysteresis protection
+            if (overcharge && (VBat < BATTERYOVERCHARGECLEAR) ) { // clear overcharge state, with some hysteresis protection
                 overcharge = false;
                 serial.println("Overcharge cleared");
             }
 
-            if (VBat > 3050) { // Batteries are at risk of overcharging.  STAY AWAKE
+            if (VBat > BATTERYOVERCHARGELIMIT) { // Batteries are at risk of overcharging.  STAY AWAKE
                 overcharge = true;
                 serial.println("Overcharge");
             }
