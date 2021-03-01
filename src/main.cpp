@@ -16,15 +16,20 @@ SoftwareSerial serial(rxPin, txPin);
 bool debug = true;  // runstate serial output
 bool low_bat = false; // low battery flag
 
-#define BATTERYMIN 2400 // Minimum battery startup voltage 2.4v
-#define BATTERYRESET 2650 // Battery restart voltage 2.65v
+#define BATTERYMIN              2400 // Minimum battery startup voltage 2.4v
+#define BATTERYRESET            2650 // Battery restart voltage 2.65v
+#define BATTERYOVERCHARGELIMIT  3050 // set overcharge above 3.05v
+#define BATTERYOVERCHARGECLEAR  2900 // clear overcharge once we fall below 2.9v once we've been in an overcharge state
 
 bool overcharge = false;  // flag to capture overcharge battery state
 
 // Analog sensing pin
 int VBatPin = A1;    // Reads in the analogue number of voltage
 unsigned long VBat = 0; // This will hold the batery pack voltage 2000->3000mv
-long Vanalog = 0; // Raw ADC readings of battery voltage
+
+// values for the voltage divider resistors
+#define VOLTAGE_DIVIDER_R1 554000
+#define VOLTAGE_DIVIDER_R2 224500
 
 // sleep bit patterns
 #define SLEEP1 0b000110 // 1 second
@@ -35,9 +40,13 @@ long Vanalog = 0; // Raw ADC readings of battery voltage
 // state machine
 int run_state = 0;
 
+bool awake = false;
+
+
 ISR(WDT_vect) {
     wdt_disable();  
 }
+
 
 void myWatchdogEnable(const byte interval) {
     wdt_reset();
@@ -50,15 +59,33 @@ void myWatchdogEnable(const byte interval) {
     ADCSRA = 0;
     power_all_disable(); // shut down ADC, Timer 0 and 1, serial etc
   
-    set_sleep_mode (SLEEP_MODE_PWR_DOWN); 
+    set_sleep_mode (SLEEP_MODE_PWR_DOWN);
     sleep_bod_disable();
     sei();
     sleep_mode();
 
     power_all_enable();
     ADCSRA = old_ADCSRA;
-} 
+}
 
+
+unsigned long readBatteryVoltage() {
+    int Vanalog = 0; // Raw ADC readings of battery voltage
+
+    //Let's check the battery off load before we go any further
+    Vanalog = analogRead(VBatPin);
+    serial.print("ADCraw: ");
+    serial.println(Vanalog);
+
+    // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
+    // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
+    //
+    // Vout = Vs x R2 / (R1 + R2)
+    // Vs = ( Vout x (R1 + R2) ) / R2
+    // Vout = Analogue / 1023 * 1.1 * 1000 (multiply by 1000 as we want mV units)
+
+    return (((double)Vanalog / 1023 * 1.1 * 1000) * (VOLTAGE_DIVIDER_R1 + VOLTAGE_DIVIDER_R2)) / VOLTAGE_DIVIDER_R2;
+}
 
 void setup() {
     // Set up IO pins
@@ -70,7 +97,9 @@ void setup() {
     digitalWrite(EN3, LOW);
     digitalWrite(EN5, LOW);
 
-    analogReference(INTERNAL1V1); 
+    analogReference(INTERNAL1V1);
+    // read a sample and discard it
+    analogRead(VBatPin);
 
     // Start the software serial
     serial.begin(4800);
@@ -84,11 +113,7 @@ void setup() {
  * 1 = Wait for 10 seconds for the device to wake up else go into power down forever (charging state)
  * 2 = Device has woken up, so wait for device to ask for power off sleep then go back to state 0
  * 3 = No devices were detected, power down and go into a solar charging state until reset.
- * 
- * 
  */
-
-bool awake = false;
 
 void loop() {
     switch(run_state) {
@@ -96,14 +121,8 @@ void loop() {
             if (debug)
                 serial.println(run_state);
 
-            //Let's check the battery off load before we go any further
-            Vanalog = analogRead(VBatPin);
-            serial.print("ADCraw: ");
-            serial.println(Vanalog);
-
-            // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
-            // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
-            VBat = (Vanalog * 3695) / 1000;
+            // Let's check the battery off load before we go any further
+            VBat = readBatteryVoltage();
 
             serial.print("VBat: ");
             serial.print(VBat);
@@ -126,12 +145,12 @@ void loop() {
                 myWatchdogEnable (SLEEP1); // 1 second short sleep to save power whilst waiting
             }
 
-            if (overcharge && (VBat < 2900) ) { // clear overcharge state, with some hysteresis protection
+            if (overcharge && (VBat < BATTERYOVERCHARGECLEAR) ) { // clear overcharge state, with some hysteresis protection
                 overcharge = false;
                 serial.println("Overcharge cleared");
             }
 
-            if (VBat > 3050) { // Batteries are at risk of overcharging.  STAY AWAKE
+            if (VBat > BATTERYOVERCHARGELIMIT) { // Batteries are at risk of overcharging.  STAY AWAKE
                 overcharge = true;
                 serial.println("Overcharge");
             }
@@ -164,13 +183,7 @@ void loop() {
             }
 
             // Sample battery voltage under load
-            Vanalog = analogRead(VBatPin);
-            serial.print("ADCraw: ");
-            serial.println(Vanalog);
-
-            // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
-            // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
-            VBat = (Vanalog * 3695) / 1000;
+            VBat = readBatteryVoltage();
 
             serial.print("VBat: ");
             serial.print(VBat);
