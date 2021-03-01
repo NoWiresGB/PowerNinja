@@ -26,7 +26,10 @@ bool overcharge = false;  // flag to capture overcharge battery state
 // Analog sensing pin
 int VBatPin = A1;    // Reads in the analogue number of voltage
 unsigned long VBat = 0; // This will hold the batery pack voltage 2000->3000mv
-long Vanalog = 0; // Raw ADC readings of battery voltage
+
+// values for the voltage divider resistors
+#define VOLTAGE_DIVIDER_R1 554000
+#define VOLTAGE_DIVIDER_R2 224500
 
 // sleep bit patterns
 #define SLEEP1 0b000110 // 1 second
@@ -37,9 +40,13 @@ long Vanalog = 0; // Raw ADC readings of battery voltage
 // state machine
 int run_state = 0;
 
+bool awake = false;
+
+
 ISR(WDT_vect) {
     wdt_disable();  
 }
+
 
 void myWatchdogEnable(const byte interval) {
     wdt_reset();
@@ -62,6 +69,24 @@ void myWatchdogEnable(const byte interval) {
 }
 
 
+unsigned long readBatteryVoltage() {
+    int Vanalog = 0; // Raw ADC readings of battery voltage
+
+    //Let's check the battery off load before we go any further
+    Vanalog = analogRead(VBatPin);
+    serial.print("ADCraw: ");
+    serial.println(Vanalog);
+
+    // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
+    // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
+    //
+    // Vout = Vs x R2 / (R1 + R2)
+    // Vs = ( Vout x (R1 + R2) ) / R2
+    // Vout = Analogue / 1023 * 1.1 * 1000 (multiply by 1000 as we want mV units)
+
+    return (((double)Vanalog / 1023 * 1.1 * 1000) * (VOLTAGE_DIVIDER_R1 + VOLTAGE_DIVIDER_R2)) / VOLTAGE_DIVIDER_R2;
+}
+
 void setup() {
     // Set up IO pins
     pinMode(rxPin, INPUT);
@@ -72,7 +97,9 @@ void setup() {
     digitalWrite(EN3, LOW);
     digitalWrite(EN5, LOW);
 
-    analogReference(INTERNAL1V1); 
+    analogReference(INTERNAL1V1);
+    // read a sample and discard it
+    analogRead(VBatPin);
 
     // Start the software serial
     serial.begin(4800);
@@ -86,11 +113,7 @@ void setup() {
  * 1 = Wait for 10 seconds for the device to wake up else go into power down forever (charging state)
  * 2 = Device has woken up, so wait for device to ask for power off sleep then go back to state 0
  * 3 = No devices were detected, power down and go into a solar charging state until reset.
- * 
- * 
  */
-
-bool awake = false;
 
 void loop() {
     switch(run_state) {
@@ -98,14 +121,8 @@ void loop() {
             if (debug)
                 serial.println(run_state);
 
-            //Let's check the battery off load before we go any further
-            Vanalog = analogRead(VBatPin);
-            serial.print("ADCraw: ");
-            serial.println(Vanalog);
-
-            // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
-            // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
-            VBat = (Vanalog * 3695) / 1000;
+            // Let's check the battery off load before we go any further
+            VBat = readBatteryVoltage();
 
             serial.print("VBat: ");
             serial.print(VBat);
@@ -166,13 +183,7 @@ void loop() {
             }
 
             // Sample battery voltage under load
-            Vanalog = analogRead(VBatPin);
-            serial.print("ADCraw: ");
-            serial.println(Vanalog);
-
-            // Calculate voltage: Internal Ref 1060mV..   VBAT---560k--^---220k---GND
-            // Adjusted for actual reading but need more accurate resistors really! - 5% LOL.
-            VBat = (Vanalog * 3695) / 1000;
+            VBat = readBatteryVoltage();
 
             serial.print("VBat: ");
             serial.print(VBat);
